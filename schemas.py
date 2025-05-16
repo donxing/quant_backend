@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 class UserCreate(BaseModel):
     username: str
@@ -28,7 +28,7 @@ class StockData(BaseModel):
     BOTTOMBUY: bool
     BOTTOMUPBUY: bool
     POTENTIALBUY: bool
-    STARK: bool
+    STARK: Optional[bool] = False
     TRENDBUY: bool
     STRONGBUY: bool
     POWERDOWNSELL: bool
@@ -36,6 +36,7 @@ class StockData(BaseModel):
     CLEANSELL: bool
     STAGESELL: bool
     buy_score: float
+    POWERLINE: Optional[float] = None  # Added as optional
 
 class StockResponse(BaseModel):
     code: str
