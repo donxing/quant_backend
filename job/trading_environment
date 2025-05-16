@@ -1,0 +1,139 @@
+import gym
+import numpy as np
+import pandas as pd
+from gym import spaces
+
+class TradingEnvironment(gym.Env):
+    """Custom trading environment for A-share data"""
+    
+    def __init__(self, df):
+        super(TradingEnvironment, self).__init__()
+        self.df = df.reset_index(drop=True)
+        self.current_step = 0
+        self.max_steps = len(df) - 1
+        self.cash = 100000.0  # Initial cash
+        self.position = 0  # Number of shares held
+        self.portfolio_value = self.cash
+        
+        # State space: [buy_score, DDX, POWERUP, POWERLINE, close_price]
+        self.observation_space = spaces.Box(low=np.array([0, -np.inf, 0, 0, 0]),
+                                           high=np.array([np.inf, np.inf, 1, np.inf, np.inf]),
+                                           dtype=np.float32)
+        
+        # Action space: 0 = Hold, 1 = Buy, 2 = Sell
+        self.action_space = spaces.Discrete(3)
+        
+        # Ensure required columns are present
+        required_cols = ['buy_score', 'ddx', 'POWERUP', 'POWERLINE', 'close']
+        if not all(col in self.df.columns for col in required_cols):
+            raise ValueError(f"Missing required columns: {set(required_cols) - set(self.df.columns)}")
+    
+    def reset(self):
+        """Reset the environment to initial state"""
+        self.current_step = 0
+        self.cash = 100000.0
+        self.position = 0
+        self.portfolio_value = self.cash
+        return self._get_observation()
+    
+    def _get_observation(self):
+        """Get the current state"""
+        obs = self.df.iloc[self.current_step][['buy_score', 'ddx', 'POWERUP', 'POWERLINE', 'close']].values
+        return obs.astype(np.float32)
+    
+    def step(self, action):
+        """Take a step in the environment"""
+        current_price = self.df.iloc[self.current_step]['close']
+        next_step = min(self.current_step + 1, self.max_steps)
+        next_price = self.df.iloc[next_step]['close']
+        reward = 0.0
+        
+        # Execute action
+        if action == 1 and self.cash >= current_price and self.position == 0:  # Buy
+            shares_to_buy = self.cash // current_price
+            self.cash -= shares_to_buy * current_price
+            self.position += shares_to_buy
+        elif action == 2 and self.position > 0:  # Sell
+            self.cash += self.position * current_price
+            reward = (self.cash + self.position * current_price - self.portfolio_value) / self.portfolio_value * 100
+            self.position = 0
+        
+        # Update portfolio value
+        self.portfolio_value = self.cash + self.position * current_price
+        
+        # Move to next step
+        self.current_step = next_step
+        done = self.current_step >= self.max_steps
+        obs = self._get_observation()
+        
+        # Reward based on price movement if holding
+        if self.position > 0 and next_price > current_price:
+            reward += (next_price - current_price) / current_price * 100 * self.position
+        elif self.position > 0 and next_price < current_price:
+            reward -= (current_price - next_price) / current_price * 100 * self.position
+        
+        return obs, reward, done, {}
+    
+    def render(self, mode='human'):
+        """Render the current state (for debugging)"""
+        print(f"Step: {self.current_step}, Cash: {self.cash:.2f}, Position: {self.position}, Value: {self.portfolio_value:.2f}")
+
+class QLearningTrader:
+    """Q-learning implementation for trading strategy"""
+    
+    def __init__(self, env, learning_rate=0.1, discount_factor=0.9, epsilon=0.1):
+        self.env = env
+        self.lr = learning_rate
+        self.gamma = discount_factor
+        self.epsilon = epsilon
+        self.q_table = np.zeros((len(env.df), env.action_space.n))  # Simplified Q-table
+        
+    def choose_action(self, state):
+        """Choose action based on epsilon-greedy policy"""
+        if np.random.random() < self.epsilon:
+            return self.env.action_space.sample()  # Explore
+        return np.argmax(self.q_table[state[0].astype(int)])  # Exploit
+    
+    def train(self, episodes=100):
+        """Train the Q-learning agent"""
+        for _ in range(episodes):
+            state = self.env.reset()
+            done = False
+            while not done:
+                action = self.choose_action(state)
+                next_state, reward, done, _ = self.env.step(action)
+                old_value = self.q_table[state[0].astype(int), action]
+                next_max = np.max(self.q_table[next_state[0].astype(int)])
+                self.q_table[state[0].astype(int), action] = old_value + self.lr * (
+                    reward + self.gamma * next_max - old_value
+                )
+                state = next_state
+            self.env.render()
+    
+    def get_best_threshold(self):
+        """Analyze Q-table to find best buy_score threshold"""
+        buy_actions = self.q_table[:, 1]  # Index 1 corresponds to Buy action
+        threshold = np.argmax(buy_actions)  # Simplistic approach: highest Q-value for Buy
+        return threshold
+
+# Example usage
+if __name__ == "__main__":
+    # Load your A-share data (replace with your actual DataFrame)
+    df = pd.read_parquet("data/trade_indicators.parquet")  # Adjust path
+    env = TradingEnvironment(df)
+    trader = QLearningTrader(env)
+    
+    # Train the model
+    trader.train(episodes=100)
+    
+    # Get the best buy_score threshold
+    best_threshold = trader.get_best_threshold()
+    print(f"Best buy_score threshold for buying: {best_threshold}")
+    
+    # Evaluate the strategy
+    state = env.reset()
+    done = False
+    while not done:
+        action = np.argmax(trader.q_table[state[0].astype(int)])
+        state, reward, done, _ = env.step(action)
+        env.render()

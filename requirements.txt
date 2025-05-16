@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+SQLAlchemy>=1.4
+aiosqlite
+passlib[bcrypt]
+# 安装最新版 fastapi_simple_security（从 GitHub）
+git+https://github.com/mrtolkien/fastapi_simple_security.git
